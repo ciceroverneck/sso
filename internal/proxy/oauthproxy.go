@@ -786,9 +786,9 @@ func (p *OAuthProxy) Authenticate(rw http.ResponseWriter, req *http.Request) (er
 	// To reduce strain on upstream identity providers we only revalidate email domains and
 	// addresses on each request here.
 	for _, v := range p.Validators {
-		_, EmailGroupValidator := v.(options.EmailGroupValidator)
+		//_, EmailGroupValidator := v.(options.EmailGroupValidator)
 
-		if !EmailGroupValidator {
+		//if !EmailGroupValidator {
 			err := v.Validate(session)
 			if err != nil {
 				tags = append(tags, "error:validation_failed")
@@ -797,7 +797,7 @@ func (p *OAuthProxy) Authenticate(rw http.ResponseWriter, req *http.Request) (er
 					fmt.Sprintf("permission denied: unauthorized: %q", err))
 				return ErrUserNotAuthorized
 			}
-		}
+		//}
 	}
 
 	logger.WithRemoteAddress(remoteAddr).WithUser(session.Email).Info(

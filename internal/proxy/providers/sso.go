@@ -19,6 +19,7 @@ import (
 	log "github.com/buzzfeed/sso/internal/pkg/logging"
 	"github.com/buzzfeed/sso/internal/pkg/sessions"
 	"github.com/datadog/datadog-go/statsd"
+	"github.com/ReneKroon/ttlcache"
 )
 
 var (
@@ -35,6 +36,7 @@ var (
 )
 
 var userAgentString string
+var cache *ttlcache.Cache
 
 // SSOProvider holds the data associated with the SSOProviders
 // necessary to implement a SSOProvider interface.
@@ -45,6 +47,9 @@ type SSOProvider struct {
 }
 
 func init() {
+	cache = ttlcache.NewCache()
+	cache.SetTTL(time.Minute*10)
+
 	version := os.Getenv("RIG_IMAGE_VERSION")
 	if version == "" {
 		version = "HEAD"
@@ -56,7 +61,7 @@ func init() {
 
 // NewSSOProvider instantiates a new SSOProvider with provider data and
 // a statsd client.
-func NewSSOProvider(p *ProviderData, sc *statsd.Client) *SSOProvider {
+func NewSSOProvider(p *ProviderData, sc *statsd.Client) Provider {
 	p.ProviderName = "SSO"
 	slug := p.ProviderSlug
 
@@ -200,14 +205,33 @@ func (p *SSOProvider) ValidateGroup(email string, allowedGroups []string, access
 	return inGroups, allowed, nil
 }
 
+
+func keyCache(email string, groups []string) string {
+	return fmt.Sprintf("e:%s,g:%s", email,strings.Join(groups,","))
+}
 // UserGroups takes an email and returns the UserGroups for that email
 func (p *SSOProvider) UserGroups(email string, groups []string, accessToken string) ([]string, error) {
+	var jsonResponse struct {
+		Email  string   `json:"email"`
+		Groups []string `json:"groups"`
+	}
+	key := keyCache(email, groups)
+
+	pCache, exists := cache.Get(key)
+	if exists {
+		if err := json.Unmarshal(pCache.([]byte),&jsonResponse); err != nil {
+			return nil, err
+		}
+		return jsonResponse.Groups, nil
+	}
+
 	params := url.Values{}
 	params.Add("email", email)
 	params.Add("client_id", p.ClientID)
 	params.Add("groups", strings.Join(groups, ","))
 
 	req, err := p.newRequest("GET", fmt.Sprintf("%s?%s", p.ProfileURL.String(), params.Encode()), nil)
+
 	if err != nil {
 		return nil, err
 	}
@@ -233,17 +257,14 @@ func (p *SSOProvider) UserGroups(email string, groups []string, accessToken stri
 		}
 		return nil, fmt.Errorf("got %d from %q %s", resp.StatusCode, p.ProfileURL.String(), body)
 	}
-
-	var jsonResponse struct {
-		Email  string   `json:"email"`
-		Groups []string `json:"groups"`
-	}
+	cache.Set(key, body)
 	if err := json.Unmarshal(body, &jsonResponse); err != nil {
 		return nil, err
 	}
 
 	return jsonResponse.Groups, nil
 }
+
 
 // RefreshSession takes a SessionState and allowedGroups and refreshes the session access token,
 // returns `true` on success, and `false` on error
